@@ -29,10 +29,14 @@
 #include "SDL_kmsdrmopengles.h"
 #include "SDL_kmsdrmdyn.h"
 #include <errno.h>
+#include<stdbool.h>
 
 #ifndef EGL_PLATFORM_GBM_MESA
 #define EGL_PLATFORM_GBM_MESA 0x31D7
 #endif
+
+extern rga_info_t src_info;
+extern rga_info_t dst_info;
 
 /* EGL implementation of SDL OpenGL support */
 
@@ -93,6 +97,7 @@ int KMSDRM_GLES_SwapWindow(_THIS, SDL_Window *window)
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
     KMSDRM_FBInfo *fb_info;
     int ret = 0;
+    struct gbm_bo* rga_buffer = NULL;
 
     /* Always wait for the previous issued flip before issuing a new one,
        even if you do async flips. */
@@ -136,7 +141,26 @@ int KMSDRM_GLES_SwapWindow(_THIS, SDL_Window *window)
     }
 
     /* Get an actual usable fb for the next front buffer. */
-    fb_info = KMSDRM_FBFromBO(_this, windata->next_bo);
+    if (src_info.fd) {
+        close(src_info.fd);
+    }
+    src_info.fd = KMSDRM_gbm_bo_get_fd(windata->next_bo);
+    dst_info.fd = viddata->rga_buffer_prime_fds[viddata->rga_buffer_index];
+    if (c_RkRgaBlit(&src_info, &dst_info, NULL) < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_VIDEO,
+            "Failed to rga blit\n");
+    }
+
+    rga_buffer = viddata->rga_buffers[viddata->rga_buffer_index];
+    fb_info = KMSDRM_FBFromBO(_this, rga_buffer);
+
+    if (!fb_info) {
+        SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Could not get a framebuffer");
+        return 0;
+    }
+
+    viddata->rga_buffer_index = (viddata->rga_buffer_index + 1) % RGA_BUFFERS_MAX;
+
     if (fb_info == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Could not get a framebuffer");
         return 0;
