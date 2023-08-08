@@ -36,6 +36,8 @@
 #include <assert.h>
 
 #define RGA_BUFFERS_MAX (3)
+//#define RGA_ALIGN(x, a) ((((x) + ((a) - 1)) / (a)) * (a))
+#define RGA_ALIGN(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 
 typedef struct SDL_VideoData
 {
@@ -78,6 +80,8 @@ typedef struct SDL_DisplayData
 
     drmModeCrtc *saved_crtc; /* CRTC to restore on quit */
     SDL_bool saved_vrr;
+    
+    uint64_t orientation;
 
     /* DRM & GBM cursor stuff lives here, not in an SDL_Cursor's driverdata struct,
        because setting/unsetting up these is done on window creation/destruction,
