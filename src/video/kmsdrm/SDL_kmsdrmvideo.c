@@ -627,6 +627,8 @@ static SDL_bool KMSDRM_VrrPropId(uint32_t drm_fd, uint32_t crtc_id, uint32_t *vr
 static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
                                           uint32_t output_id)
 {
+    FILE *hdmifile;
+    int is_hdmi = 0;
     uint32_t i;
     SDL_bool found = SDL_FALSE;
     uint64_t orientation = DRM_MODE_PANEL_ORIENTATION_NORMAL;
@@ -634,6 +636,16 @@ static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
     drmModeObjectPropertiesPtr props = KMSDRM_drmModeObjectGetProperties(drm_fd,
                                                                          output_id,
                                                                          DRM_MODE_OBJECT_CONNECTOR);
+
+    hdmifile = fopen("/sys/class/extcon/hdmi/state", "r");
+    if(hdmifile) {
+        fscanf(hdmifile, "HDMI=%d", &is_hdmi);
+        fclose(hdmifile);
+
+        // Hack - disable rotation when HDMI is enabled
+        if (is_hdmi != 0)
+            return 0;
+    }
 
     // Allow forcing specific orientations for debugging.
     const char *override = SDL_getenv("SDL_KMSDRM_ORIENTATION");
