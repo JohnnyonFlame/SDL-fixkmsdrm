@@ -1600,6 +1600,9 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
            See following comments on why. */
         window->flags |= SDL_WINDOW_OPENGL;
 
+        /* For things like FNA, we want to force this window to be resizable. */
+        window->flags |= SDL_WINDOW_RESIZABLE;
+
         if (!(viddata->gbm_init)) {
 
             /* After SDL_CreateWindow, most SDL2 programs will do SDL_CreateRenderer(),
