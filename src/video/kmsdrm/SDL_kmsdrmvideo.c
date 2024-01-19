@@ -784,6 +784,7 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     int mode_index;
     int i, j;
     int ret = 0;
+    int drmMode = -1;
 
     /* Reserve memory for the new display's driverdata. */
     dispdata = (SDL_DisplayData *)SDL_calloc(1, sizeof(SDL_DisplayData));
@@ -853,7 +854,6 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     // batocera - set resolution
     {
         FILE* fdDrmMode;
-        int drmMode;
         if((fdDrmMode = fopen("/var/run/drmMode", "r")) != NULL) {
             if(fscanf(fdDrmMode, "%i", &drmMode) == 1) {
                 if(drmMode>=0 && drmMode<connector->count_modes) {
@@ -940,9 +940,14 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     /* Get the mode currently setup for this display,
        which is the mode currently setup on the CRTC
        we found for the active connector. */
-    dispdata->mode = crtc->mode;
     dispdata->original_mode = crtc->mode;
-    dispdata->fullscreen_mode = crtc->mode;
+    if (drmMode >= 0) {
+        dispdata->mode = connector->modes[drmMode];
+        dispdata->fullscreen_mode = connector->modes[drmMode];
+    } else {
+        dispdata->mode = crtc->mode;
+        dispdata->fullscreen_mode = crtc->mode;
+    }
 
     if (dispdata->mode.hdisplay == 0 || dispdata->mode.vdisplay == 0) {
         ret = SDL_SetError("Couldn't get a valid connector videomode.");
