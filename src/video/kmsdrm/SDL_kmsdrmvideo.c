@@ -1164,7 +1164,7 @@ static void KMSDRM_DestroySurfaces(_THIS, SDL_Window *window)
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
     SDL_WindowData *windata = (SDL_WindowData *)window->driverdata;
     SDL_DisplayData *dispdata = (SDL_DisplayData *)SDL_GetDisplayForWindow(window)->driverdata;
-    int ret;
+    int i, ret;
 
     /**********************************************/
     /* Wait for last issued pageflip to complete. */
@@ -1223,6 +1223,20 @@ static void KMSDRM_DestroySurfaces(_THIS, SDL_Window *window)
     if (windata->gs) {
         KMSDRM_gbm_surface_destroy(windata->gs);
         windata->gs = NULL;
+    }
+
+    /****************************/
+    /* Destroy the RGA surfaces */
+    /****************************/
+
+    for (i = 0; i < RGA_BUFFERS_MAX; i++) {
+        if (viddata->rga_buffers[i] == NULL)
+            continue;
+
+        KMSDRM_gbm_bo_destroy(viddata->rga_buffers[i]);
+        close(viddata->rga_buffer_prime_fds[i]);
+        viddata->rga_buffers[i] = NULL;
+        viddata->rga_buffer_prime_fds[i] = -1;
     }
 }
 
@@ -1316,6 +1330,13 @@ int KMSDRM_CreateSurfaces(_THIS, SDL_Window *window)
     if (!windata->gs) {
         return SDL_SetError("Could not create GBM surface");
     }
+
+    /* Now that we have the shadow buffers initialized, create the actual
+       buffers required to display the image in the panel layout. */
+    if (dispdata->orientation & 1)
+        KMSDRM_InitRotateBuffer(_this, dispdata->orientation, display->current_mode.h, display->current_mode.w);
+    else
+        KMSDRM_InitRotateBuffer(_this, dispdata->orientation, display->current_mode.w, display->current_mode.h);
 
     /* We can't get the EGL context yet because SDL_CreateRenderer has not been called,
        but we need an EGL surface NOW, or GL won't be able to render into any surface
@@ -1700,9 +1721,6 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
        SDL_SetMouseFocus() also takes care of calling KMSDRM_ShowCursor() if necessary. */
     SDL_SetMouseFocus(window);
     SDL_SetKeyboardFocus(window);
-
-    data = (SDL_DisplayData *) SDL_GetDisplayForWindow(window)->driverdata;
-    KMSDRM_InitRotateBuffer(_this, dispdata->orientation, data->mode.hdisplay, data->mode.vdisplay);
   
     /* Tell the app that the window has moved to top-left. */
     SDL_SendWindowEvent(window, SDL_WINDOWEVENT_MOVED, 0, 0);
