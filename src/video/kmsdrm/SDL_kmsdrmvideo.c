@@ -1795,6 +1795,11 @@ void KMSDRM_SetWindowFullscreen(_THIS, SDL_Window *window, SDL_VideoDisplay *dis
 
 {
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
+    if (fullscreen)
+        window->flags |= SDL_WINDOW_FULLSCREEN;
+    else
+        window->flags &= ~SDL_WINDOW_FULLSCREEN;
+
     if (!viddata->vulkan_mode) {
         KMSDRM_DirtySurfaces(window);
     }
