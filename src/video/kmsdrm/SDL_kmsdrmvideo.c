@@ -338,8 +338,12 @@ static void KMSDRM_FBDestroyCallback(struct gbm_bo *bo, void *data)
 static void
 KMSDRM_InitRotateBuffer(_THIS, int orientation, int frameWidth, int frameHeight)
 {
-    int l_frameHeight, l_frameWidth;
+    int rotation, l_frameHeight, l_frameWidth;
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
+
+    // Don't use RGA for native orientation!
+    if (orientation == 0)
+        return;
 
     // initialize 2D raster graphic acceleration unit (RGA)
     c_RkRgaInit();
@@ -360,17 +364,17 @@ KMSDRM_InitRotateBuffer(_THIS, int orientation, int frameWidth, int frameHeight)
     }
     viddata->rga_buffer_index = 0;
 
+    switch (orientation) {
+    default: rotation = 0; break;
+    case 1:  rotation = HAL_TRANSFORM_ROT_90; break;
+    case 2:  rotation = HAL_TRANSFORM_ROT_180; break;
+    case 3:  rotation = HAL_TRANSFORM_ROT_270; break;
+    }
+    
     // setup rotation
     src_info.fd = -1;
     src_info.mmuFlag = 1;
-    switch (orientation) {
-    default: src_info.rotation = 0; break;
-    case 1:  src_info.rotation = HAL_TRANSFORM_ROT_90; break;
-    case 2:  src_info.rotation = HAL_TRANSFORM_ROT_180; break;
-    case 3:  src_info.rotation = HAL_TRANSFORM_ROT_270; break;
-    }
-
-    // swap width and height and adjust stride here because our source buffer is 480x854
+    src_info.rotation = rotation;
     if (orientation & 1)
         rga_set_rect(&src_info.rect, 0, 0, frameHeight, frameWidth, l_frameHeight, l_frameWidth, RK_FORMAT_BGRA_8888);
     else
@@ -626,16 +630,30 @@ static SDL_bool KMSDRM_VrrPropId(uint32_t drm_fd, uint32_t crtc_id, uint32_t *vr
 static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
                                           uint32_t output_id)
 {
-    FILE *hdmifile;
+    char rootfsver[2048] = "";
+    FILE *hdmifile = NULL;
     int is_hdmi = 0;
     uint32_t i;
     SDL_bool found = SDL_FALSE;
     uint64_t orientation = DRM_MODE_PANEL_ORIENTATION_NORMAL;
+    const char *override;
 
     drmModeObjectPropertiesPtr props = KMSDRM_drmModeObjectGetProperties(drm_fd,
                                                                          output_id,
                                                                          DRM_MODE_OBJECT_CONNECTOR);
 
+    // Is this a Super Pocket?
+    hdmifile = fopen("/etc/rootfs_version", "r");
+    if (hdmifile) { //Likely Evercade!
+        fseek(hdmifile, 4, SEEK_SET);
+        fread(rootfsver, 1, sizeof(rootfsver)-1, hdmifile);
+        fclose(hdmifile);
+
+        if (strncmp("Super Pocket", rootfsver, 12) == 0)
+            return 3;
+    }
+
+    // Is a HDMI cable connected?
     hdmifile = fopen("/sys/class/extcon/hdmi/state", "r");
     if(hdmifile) {
         fscanf(hdmifile, "HDMI=%d", &is_hdmi);
@@ -647,7 +665,7 @@ static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
     }
 
     // Allow forcing specific orientations for debugging.
-    const char *override = SDL_getenv("SDL_KMSDRM_ORIENTATION");
+    override = SDL_getenv("SDL_KMSDRM_ORIENTATION");
     if (override && override[0] != '\0') {
         int val = SDL_atoi(override);
         return SDL_clamp(val, 0, 3);

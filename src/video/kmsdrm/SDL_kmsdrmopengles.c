@@ -139,23 +139,33 @@ int KMSDRM_GLES_SwapWindow(_THIS, SDL_Window *window)
         return 0;
     }
 
-    /* Get an actual usable fb for the next front buffer. */
-    if (src_info.fd) {
-        close(src_info.fd);
-    }
-    src_info.fd = KMSDRM_gbm_bo_get_fd(windata->next_bo);
-    dst_info.fd = viddata->rga_buffer_prime_fds[viddata->rga_buffer_index];
-    if (c_RkRgaBlit(&src_info, &dst_info, NULL) < 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_VIDEO,
-            "Failed to rga blit\n");
-    }
+    if (dispdata->orientation != 0) {
+        /* Get an actual usable fb for the next front buffer. */
+        if (src_info.fd) {
+            close(src_info.fd);
+        }
 
-    rga_buffer = viddata->rga_buffers[viddata->rga_buffer_index];
-    fb_info = KMSDRM_FBFromBO(_this, rga_buffer);
+        src_info.fd = KMSDRM_gbm_bo_get_fd(windata->next_bo);
+        dst_info.fd = viddata->rga_buffer_prime_fds[viddata->rga_buffer_index];
+        if (c_RkRgaBlit(&src_info, &dst_info, NULL) < 0) {
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO,
+                "Failed to rga blit\n");
+        }
 
-    if (!fb_info) {
-        SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Could not get a framebuffer");
-        return 0;
+        rga_buffer = viddata->rga_buffers[viddata->rga_buffer_index];
+        fb_info = KMSDRM_FBFromBO(_this, rga_buffer);
+
+        if (!fb_info) {
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Could not get a framebuffer");
+            return 0;
+        }
+    } else {
+        /* Get an actual usable fb for the next front buffer. */
+        fb_info = KMSDRM_FBFromBO(_this, windata->next_bo);
+        if (fb_info == NULL) {
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Could not get a framebuffer");
+            return 0;
+        }
     }
 
     viddata->rga_buffer_index = (viddata->rga_buffer_index + 1) % RGA_BUFFERS_MAX;
