@@ -345,7 +345,7 @@ KMSDRM_InitRotateBuffer(_THIS, int orientation, int frameWidth, int frameHeight)
     c_RkRgaInit();
 
     // RGA requires the input frames to be aligned
-    l_frameWidth = frameWidth;
+    l_frameWidth = RGA_ALIGN(frameWidth, 32);
     l_frameHeight = RGA_ALIGN(frameHeight, 32);
 
     // create buffers for RGA with adjusted stride
@@ -378,8 +378,7 @@ KMSDRM_InitRotateBuffer(_THIS, int orientation, int frameWidth, int frameHeight)
 
     dst_info.fd = -1;
     dst_info.mmuFlag = 1;
-
-    rga_set_rect(&dst_info.rect, 0, 0, frameWidth, frameHeight, frameWidth, frameHeight, RK_FORMAT_BGRA_8888);
+    rga_set_rect(&dst_info.rect, 0, 0, frameWidth, frameHeight, l_frameWidth, l_frameHeight, RK_FORMAT_BGRA_8888);
 }
 
 KMSDRM_FBInfo *KMSDRM_FBFromBO(_THIS, struct gbm_bo *bo)
