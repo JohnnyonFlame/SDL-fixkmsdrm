@@ -150,6 +150,7 @@ static int KMSDRM_DumpCursorToBO(SDL_VideoDisplay *display, SDL_Cursor *cursor)
     SDL_VideoDevice *video_device = SDL_GetVideoDevice();
     SDL_VideoData *viddata = ((SDL_VideoData *)video_device->driverdata);
 
+    uintptr_t src_buf, dst_buf;
     uint32_t bo_handle;
     size_t bo_stride;
     size_t bufsize;
@@ -177,8 +178,8 @@ static int KMSDRM_DumpCursorToBO(SDL_VideoDisplay *display, SDL_Cursor *cursor)
     }
 
     /* Copy from the cursor buffer to a buffer that we can dump to the GBM BO. */
-    uintptr_t src_buf = (uintptr_t)curdata->buffer;
-    uintptr_t dst_buf = (uintptr_t)ready_buffer;
+    src_buf = (uintptr_t)curdata->buffer;
+    dst_buf = (uintptr_t)ready_buffer;
     for (i = 0; i < curdata->h; i++) {
         for (j = 0; j < curdata->w; j++) {
             uintptr_t src_pixel = src_buf + (i * curdata->w + j) * 4;
