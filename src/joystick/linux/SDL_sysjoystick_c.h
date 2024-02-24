@@ -30,6 +30,7 @@ struct SDL_joylist_item;
 struct joystick_hwdata
 {
     int fd;
+    int fd2;
     struct SDL_joylist_item *item;
     SDL_JoystickGUID guid;
     char *fname; /* Used in haptic subsystem */

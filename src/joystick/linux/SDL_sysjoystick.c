@@ -173,6 +173,8 @@ static time_t last_input_dir_mtime;
 
 static void FixupDeviceInfoForMapping(int fd, struct input_id *inpid)
 {
+    char product_string[128];
+
     if (inpid->vendor == 0x045e && inpid->product == 0x0b05 && inpid->version == 0x0903) {
         /* This is a Microsoft Xbox One Elite Series 2 controller */
         unsigned long keybit[NBITS(KEY_MAX)] = { 0 };
@@ -190,6 +192,18 @@ static void FixupDeviceInfoForMapping(int fd, struct input_id *inpid)
      * version information */
     if (inpid->vendor == 0x3250 && (inpid->product == 0x1001 || inpid->product == 0x1002)) {
         inpid->version = 0;
+    }
+
+
+    // Change the VIDPID for the Evercade handhelds - we don't want to clash with
+    // the gamecontroller database from the device.
+    if (inpid->bustype == 0x19 && inpid->vendor == 0x1 && inpid->product == 0x1 && inpid->version == 0x100) {
+        if (ioctl(fd, EVIOCGNAME(sizeof(product_string)), product_string) >= 0) {
+            if (SDL_strstr(product_string, "zpio-keys") != NULL) {
+                inpid->product = 0x2;
+                inpid->version = 0x200;
+            }
+        }
     }
 }
 
@@ -962,9 +976,61 @@ static SDL_bool GuessIfAxesAreDigitalHat(struct input_absinfo *absinfo_x, struct
     return SDL_FALSE;
 }
 
+static int MergeADCPotKeys(SDL_Joystick *joystick)
+{
+    char product_string[128];
+    struct stat sb;
+
+    /* Opening input devices can generate synchronous device I/O, so avoid it if we can */
+    if (stat("/dev/input", &sb) == 0) {
+        int i, count;
+        struct dirent **entries = NULL;
+
+        count = scandir("/dev/input", &entries, filter_entries, NULL);
+        if (count > 1) {
+            qsort(entries, count, sizeof(*entries), sort_entries);
+        }
+        for (i = 0; i < count; ++i) {
+            int fd = -1;
+            char path[PATH_MAX] = "";
+
+            // If we already found the device, just skip to clean-up.
+            if (joystick->hwdata->fd2 >= 0)
+                goto clear_adc;
+
+            (void)SDL_snprintf(path, SDL_arraysize(path), "/dev/input/%s", entries[i]->d_name);
+            fd = open(path, O_RDONLY | O_CLOEXEC);
+            if (fd < 0)
+                goto clear_adc;
+
+            if (ioctl(fd, EVIOCGNAME(sizeof(product_string)), product_string) >= 0) {
+                if (SDL_strstr(product_string, "adc-pot") == NULL)
+                    goto clear_adc;
+            }
+
+            // Success: Set the child device we're going to merge events from
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+            joystick->hwdata->fd2 = fd;
+            fd = -1;
+            free(entries[i]); /* This should NOT be SDL_free() */
+            continue;
+clear_adc:
+            if (fd >= 0)
+                close(fd);
+            free(entries[i]); /* This should NOT be SDL_free() */
+        }
+        free(entries); /* This should NOT be SDL_free() */
+
+        last_input_dir_mtime = sb.st_mtime;
+    }
+
+    return joystick->hwdata->fd2 >= 0;
+}
+
 static void ConfigJoystick(SDL_Joystick *joystick, int fd)
 {
     int i, t;
+    char product_string[128];
     unsigned long keybit[NBITS(KEY_MAX)] = { 0 };
     unsigned long absbit[NBITS(ABS_MAX)] = { 0 };
     unsigned long relbit[NBITS(REL_MAX)] = { 0 };
@@ -979,6 +1045,27 @@ static void ConfigJoystick(SDL_Joystick *joystick, int fd)
     if ((ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybit)), keybit) >= 0) &&
         (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absbit)), absbit) >= 0) &&
         (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relbit)), relbit) >= 0)) {
+
+        /*
+         * JohnnyonFlame:
+         * We're going to inject an extra keys to the event device
+         * so that we can have a single joystick with all of the keys
+         * available for the device.
+         */
+
+        if (ioctl(fd, EVIOCGNAME(sizeof(product_string)), product_string) >= 0) {
+            if (SDL_strstr(product_string, "zpio-keys") != NULL)
+            {
+#ifdef DEBUG_INPUT_EVENTS
+                SDL_Log("ConfigJoystick: Injecting into %s.\n", product_string);
+#endif
+                if (MergeADCPotKeys(joystick)) {
+                    //TODO:: Make this properly fetch keybit. We don't really need
+                    //it for now, but it might be interesting in the future.
+                    set_bit(KEY_END, keybit);
+                }
+            }
+        }
 
         /* Get the number of buttons, axes, and other thingamajigs */
         for (i = BTN_JOYSTICK; i < KEY_MAX; ++i) {
@@ -1193,6 +1280,7 @@ static int PrepareJoystickHwdata(SDL_Joystick *joystick, SDL_joylist_item *item)
 
     if (item->m_bSteamController) {
         joystick->hwdata->fd = -1;
+        joystick->hwdata->fd2 = -1;
         SDL_GetSteamControllerInputs(&joystick->nbuttons,
                                      &joystick->naxes,
                                      &joystick->nhats);
@@ -1208,6 +1296,7 @@ static int PrepareJoystickHwdata(SDL_Joystick *joystick, SDL_joylist_item *item)
         }
 
         joystick->hwdata->fd = fd;
+        joystick->hwdata->fd2 = -1;
         joystick->hwdata->fname = SDL_strdup(item->path);
         if (joystick->hwdata->fname == NULL) {
             close(fd);
@@ -1427,7 +1516,7 @@ static int AxisCorrect(SDL_Joystick *joystick, int which, int value)
     return value;
 }
 
-static void PollAllValues(SDL_Joystick *joystick)
+static void PollAllValues(SDL_Joystick *joystick, int fd)
 {
     struct input_absinfo absinfo;
     unsigned long keyinfo[NBITS(KEY_MAX)];
@@ -1439,7 +1528,7 @@ static void PollAllValues(SDL_Joystick *joystick)
     for (i = ABS_X; i < ABS_MAX; i++) {
         /* We don't need to test for digital hats here, they won't have has_abs[] set */
         if (joystick->hwdata->has_abs[i]) {
-            if (ioctl(joystick->hwdata->fd, EVIOCGABS(i), &absinfo) >= 0) {
+            if (ioctl(fd, EVIOCGABS(i), &absinfo) >= 0) {
                 absinfo.value = AxisCorrect(joystick, i, absinfo.value);
 
 #ifdef DEBUG_INPUT_EVENTS
@@ -1460,7 +1549,7 @@ static void PollAllValues(SDL_Joystick *joystick)
         SDL_assert(hatidx < SDL_arraysize(joystick->hwdata->has_hat));
         /* We don't need to test for analog axes here, they won't have has_hat[] set */
         if (joystick->hwdata->has_hat[hatidx]) {
-            if (ioctl(joystick->hwdata->fd, EVIOCGABS(i), &absinfo) >= 0) {
+            if (ioctl(fd, EVIOCGABS(i), &absinfo) >= 0) {
                 const int hataxis = baseaxis % 2;
                 HandleHat(joystick, hatidx, hataxis, absinfo.value);
             }
@@ -1469,7 +1558,7 @@ static void PollAllValues(SDL_Joystick *joystick)
 
     /* Poll all buttons */
     SDL_zeroa(keyinfo);
-    if (ioctl(joystick->hwdata->fd, EVIOCGKEY(sizeof(keyinfo)), keyinfo) >= 0) {
+    if (ioctl(fd, EVIOCGKEY(sizeof(keyinfo)), keyinfo) >= 0) {
         for (i = 0; i < KEY_MAX; i++) {
             if (joystick->hwdata->has_key[i]) {
                 const Uint8 value = test_bit(i, keyinfo) ? SDL_PRESSED : SDL_RELEASED;
@@ -1486,19 +1575,17 @@ static void PollAllValues(SDL_Joystick *joystick)
     /* Joyballs are relative input, so there's no poll state. Events only! */
 }
 
-static void HandleInputEvents(SDL_Joystick *joystick)
+static void HandleInputEventsHelper(SDL_Joystick *joystick, int fd)
 {
     struct input_event events[32];
     int i, len, code, hat_index;
 
-    SDL_AssertJoysticksLocked();
-
     if (joystick->hwdata->fresh) {
-        PollAllValues(joystick);
+        PollAllValues(joystick, fd);
         joystick->hwdata->fresh = SDL_FALSE;
     }
 
-    while ((len = read(joystick->hwdata->fd, events, sizeof(events))) > 0) {
+    while ((len = read(fd, events, sizeof(events))) > 0) {
         len /= sizeof(events[0]);
         for (i = 0; i < len; ++i) {
             code = events[i].code;
@@ -1562,7 +1649,7 @@ static void HandleInputEvents(SDL_Joystick *joystick)
                 case SYN_REPORT:
                     if (joystick->hwdata->recovering_from_dropped) {
                         joystick->hwdata->recovering_from_dropped = SDL_FALSE;
-                        PollAllValues(joystick); /* try to sync up to current state now */
+                        PollAllValues(joystick, fd); /* try to sync up to current state now */
                     }
                     break;
                 default:
@@ -1580,7 +1667,16 @@ static void HandleInputEvents(SDL_Joystick *joystick)
     }
 }
 
-static void HandleClassicEvents(SDL_Joystick *joystick)
+static void HandleInputEvents(SDL_Joystick *joystick)
+{
+    SDL_AssertJoysticksLocked();
+
+    HandleInputEventsHelper(joystick, joystick->hwdata->fd);
+    if (joystick->hwdata->fd2 >= 0)
+        HandleInputEventsHelper(joystick, joystick->hwdata->fd2);
+}
+
+static void HandleClassicEventsHelper(SDL_Joystick *joystick, int fd)
 {
     struct js_event events[32];
     int i, len, code, hat_index;
@@ -1588,7 +1684,7 @@ static void HandleClassicEvents(SDL_Joystick *joystick)
     SDL_AssertJoysticksLocked();
 
     joystick->hwdata->fresh = SDL_FALSE;
-    while ((len = read(joystick->hwdata->fd, events, sizeof(events))) > 0) {
+    while ((len = read(fd, events, sizeof(events))) > 0) {
         len /= sizeof(events[0]);
         for (i = 0; i < len; ++i) {
             switch (events[i].type) {
@@ -1624,6 +1720,15 @@ static void HandleClassicEvents(SDL_Joystick *joystick)
             }
         }
     }
+}
+
+static void HandleClassicEvents(SDL_Joystick *joystick)
+{
+    SDL_AssertJoysticksLocked();
+
+    HandleClassicEventsHelper(joystick, joystick->hwdata->fd);
+    if (joystick->hwdata->fd2 >= 0)
+        HandleClassicEventsHelper(joystick, joystick->hwdata->fd2);
 }
 
 static void LINUX_JoystickUpdate(SDL_Joystick *joystick)
@@ -1669,6 +1774,9 @@ static void LINUX_JoystickClose(SDL_Joystick *joystick)
         }
         if (joystick->hwdata->fd >= 0) {
             close(joystick->hwdata->fd);
+        }
+        if (joystick->hwdata->fd2 >= 0) {
+            close(joystick->hwdata->fd2);
         }
         if (joystick->hwdata->item) {
             joystick->hwdata->item->hwdata = NULL;

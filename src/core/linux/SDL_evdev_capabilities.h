@@ -46,6 +46,7 @@ typedef enum
 #define EVDEV_OFF(x)         ((x) % BITS_PER_LONG)
 #define EVDEV_LONG(x)        ((x) / BITS_PER_LONG)
 #define test_bit(bit, array) ((array[EVDEV_LONG(bit)] >> EVDEV_OFF(bit)) & 1)
+#define set_bit(bit, array) (array[EVDEV_LONG(bit)] |= (1 << EVDEV_OFF(bit)))
 
 extern int SDL_EVDEV_GuessDeviceClass(const unsigned long bitmask_ev[NBITS(EV_MAX)],
                                       const unsigned long bitmask_abs[NBITS(ABS_MAX)],
