@@ -211,7 +211,8 @@ int SDL_MouseInit(void)
 
     mouse->was_touch_mouse_events = SDL_FALSE; /* no touch to mouse movement event pending */
 
-    mouse->cursor_shown = SDL_TRUE;
+    // JohnnyonFlame: For the Evercade devices, let's default to not shown...
+    mouse->cursor_shown = SDL_GetHintBoolean("SDL_CURSOR_SHOWN_BY_DEFAULT", SDL_FALSE);
 
     return 0;
 }
@@ -881,7 +882,16 @@ void SDL_MouseQuit(void)
         SDL_UpdateMouseCapture(SDL_TRUE);
     }
     SDL_SetRelativeMouseMode(SDL_FALSE);
-    SDL_ShowCursor(1);
+
+#if 0
+    /*
+     * JohnnyonFlame: On the Evercade devices, we don't want the mouse
+     * to be re-enabled after leaving SDL, since their menus won't disable the
+     * cursor on entry.
+     */
+     SDL_ShowCursor(1);
+#endif
+    SDL_ShowCursor(0);
 
     cursor = mouse->cursors;
     while (cursor) {
