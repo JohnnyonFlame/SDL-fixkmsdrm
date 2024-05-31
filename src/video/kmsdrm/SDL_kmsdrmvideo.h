@@ -39,6 +39,14 @@
 //#define RGA_ALIGN(x, a) ((((x) + ((a) - 1)) / (a)) * (a))
 #define RGA_ALIGN(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 
+enum dev_id_t
+{
+    DEV_GENERIC=0,
+    DEV_EVERCADE_VS,
+    DEV_EVERCADE_OG,
+    DEV_HYPERMEGATECH_SP,
+};
+
 typedef struct SDL_VideoData
 {
     int devindex;     /* device index that was passed on creation */
@@ -63,6 +71,8 @@ typedef struct SDL_VideoData
     int rga_buffer_prime_fds[RGA_BUFFERS_MAX];
     int rga_buffer_index;
 
+    int device_type;
+    int is_hdmi_connected;
 } SDL_VideoData;
 
 typedef struct SDL_DisplayModeData

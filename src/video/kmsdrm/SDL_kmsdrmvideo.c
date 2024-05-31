@@ -627,10 +627,10 @@ static SDL_bool KMSDRM_VrrPropId(uint32_t drm_fd, uint32_t crtc_id, uint32_t *vr
     return SDL_TRUE;
 }
 
-static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
+static int KMSDRM_ConnectorGetOrientation(SDL_VideoData *viddata,
                                           uint32_t output_id)
 {
-    char rootfsver[2048] = "";
+    char buffer[2048] = "";
     FILE *hdmifile = NULL;
     int is_hdmi = 0;
     uint32_t i;
@@ -638,45 +638,30 @@ static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
     uint64_t orientation = DRM_MODE_PANEL_ORIENTATION_NORMAL;
     const char *override;
 
-    drmModeObjectPropertiesPtr props = KMSDRM_drmModeObjectGetProperties(drm_fd,
+    drmModeObjectPropertiesPtr props = KMSDRM_drmModeObjectGetProperties(viddata->drm_fd,
                                                                          output_id,
                                                                          DRM_MODE_OBJECT_CONNECTOR);
-
-    // Is this a Super Pocket?
-    hdmifile = fopen("/etc/rootfs_version", "r");
-    if (hdmifile) { //Likely Evercade!
-        fseek(hdmifile, 4, SEEK_SET);
-        fread(rootfsver, 1, sizeof(rootfsver)-1, hdmifile);
-        fclose(hdmifile);
-
-        if (strncmp("Super Pocket", rootfsver, 12) == 0)
-            return 3;
-    }
-
-    // Is a HDMI cable connected?
-    hdmifile = fopen("/sys/class/extcon/hdmi/state", "r");
-    if(hdmifile) {
-        fscanf(hdmifile, "HDMI=%d", &is_hdmi);
-        fclose(hdmifile);
-
-        // Hack - disable rotation when HDMI is enabled
-        if (is_hdmi != 0)
-            return 0;
-    }
-
     // Allow forcing specific orientations for debugging.
-    override = SDL_getenv("SDL_KMSDRM_ORIENTATION");
+    override = SDL_getenv("SDL_ORIENTATION_OVERRIDE");
     if (override && override[0] != '\0') {
         int val = SDL_atoi(override);
         return SDL_clamp(val, 0, 3);
     }
 
-    if (!props) {
+    // Is a HDMI cable connected?
+    if (viddata->is_hdmi_connected)
         return 0;
-    }
+
+    // Is this a Super Pocket?
+    if (viddata->device_type == DEV_HYPERMEGATECH_SP)
+        return 3;
+
+    // If we found no properties, bail out early.
+    if (!props)
+        return 0;
 
     for (i = 0; !found && i < props->count_props; ++i) {
-        drmModePropertyPtr drm_prop = KMSDRM_drmModeGetProperty(drm_fd, props->props[i]);
+        drmModePropertyPtr drm_prop = KMSDRM_drmModeGetProperty(viddata->drm_fd, props->props[i]);
 
         if (!drm_prop) {
             continue;
@@ -821,6 +806,13 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
        If we don't, new default cursors would stack up on mouse->cursors and SDL
        would have to hide and delete them at quit, not to mention the memory leak... */
     dispdata->default_cursor_init = SDL_FALSE;
+
+    // Don't use non-HDMI devices if one is connected.
+    if (viddata->is_hdmi_connected &&
+        connector->connector_type != DRM_MODE_CONNECTOR_HDMIA) {
+        printf("KMSDRM: Skipping connector %d (%d).\n", connector->connector_id, connector->connector_type);
+        goto cleanup;
+    }
 
     /* Try to find the connector's current encoder */
     for (i = 0; i < resources->count_encoders; i++) {
@@ -976,7 +968,7 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     dispdata->crtc = crtc;
 
     /* store current connector orientation */
-    dispdata->orientation = KMSDRM_ConnectorGetOrientation(viddata->drm_fd, connector->connector_id);
+    dispdata->orientation = KMSDRM_ConnectorGetOrientation(viddata, connector->connector_id);
     /* save previous vrr state */
     dispdata->saved_vrr = KMSDRM_CrtcGetVrr(viddata->drm_fd, crtc->crtc_id);
     /* try to enable vrr */
@@ -1048,9 +1040,44 @@ static int KMSDRM_InitDisplays(_THIS)
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
     drmModeRes *resources = NULL;
 
+    FILE *file = NULL;
     uint64_t async_pageflip = 0;
+    char rootfs_str[1024] = {};
+    char is_hdmi = 0;
     int ret = 0;
     int i;
+
+    file = fopen("/etc/rootfs_version", "r");
+    if (file) { //Likely Evercade!
+        fseek(file, 4, SEEK_SET);
+        fread(rootfs_str, 1, sizeof(rootfs_str)-1, file);
+        fclose(file);
+
+        if (strncmp("Super Pocket", rootfs_str, 12) == 0) {
+            viddata->device_type = DEV_HYPERMEGATECH_SP;
+        } else if (strncmp("Evercade RootFS", rootfs_str, 15) == 0) {
+            file = fopen("/sys/class/drm/card0-HDMI-A-1/status", "r");
+            fread(&is_hdmi, 1, 1, file);
+            fclose(file);
+
+            viddata->device_type = DEV_EVERCADE_OG;
+            viddata->is_hdmi_connected = is_hdmi == 'c';
+        } else if (strncmp("Evercade VS RootFS", rootfs_str, 18) == 0) {
+            viddata->device_type = DEV_EVERCADE_VS;
+        }
+    }
+
+    if (viddata->device_type == DEV_GENERIC) {
+        file = fopen("/sys/class/extcon/hdmi/state", "r");
+        if(file) {
+            fscanf(file, "HDMI=%d", &is_hdmi);
+            fclose(file);
+
+            // Hack - disable rotation when HDMI is enabled
+            if (is_hdmi != 0)
+                viddata->is_hdmi_connected = 1;
+        }
+    }
 
     /* Open /dev/dri/cardNN (/dev/drmN if on OpenBSD version less than 6.9) */
     (void)SDL_snprintf(viddata->devpath, sizeof(viddata->devpath), "%s%d",
