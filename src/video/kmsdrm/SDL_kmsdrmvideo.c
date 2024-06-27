@@ -630,9 +630,6 @@ static SDL_bool KMSDRM_VrrPropId(uint32_t drm_fd, uint32_t crtc_id, uint32_t *vr
 static int KMSDRM_ConnectorGetOrientation(SDL_VideoData *viddata,
                                           uint32_t output_id)
 {
-    char buffer[2048] = "";
-    FILE *hdmifile = NULL;
-    int is_hdmi = 0;
     uint32_t i;
     SDL_bool found = SDL_FALSE;
     uint64_t orientation = DRM_MODE_PANEL_ORIENTATION_NORMAL;
@@ -917,7 +914,8 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
         for (i = 0; i < connector->count_modes; i++) {
             drmModeModeInfo *mode = &connector->modes[i];
 
-            if (mode->type & DRM_MODE_TYPE_PREFERRED) {
+            /* If this is an Evercade VS we want to use the largest available vidmode. */
+            if ((viddata->device_type == DEV_GENERIC) && (mode->type & DRM_MODE_TYPE_PREFERRED)) {
                 mode_index = i;
                 break;
             }
@@ -1070,11 +1068,11 @@ static int KMSDRM_InitDisplays(_THIS)
     if (viddata->device_type == DEV_GENERIC) {
         file = fopen("/sys/class/extcon/hdmi/state", "r");
         if(file) {
-            fscanf(file, "HDMI=%d", &is_hdmi);
+            fscanf(file, "HDMI=%c", &is_hdmi);
             fclose(file);
 
             // Hack - disable rotation when HDMI is enabled
-            if (is_hdmi != 0)
+            if (is_hdmi == '1')
                 viddata->is_hdmi_connected = 1;
         }
     }
@@ -1652,7 +1650,6 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
     NativeDisplayType egl_display;
     drmModeModeInfo *mode;
     int ret = 0;
-    SDL_DisplayData *data;
 
     /* Allocate window internal data */
     windata = (SDL_WindowData *)SDL_calloc(1, sizeof(SDL_WindowData));
